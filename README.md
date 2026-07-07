@@ -84,3 +84,27 @@ If you are modifying the internal network logic, adhere to the following rules:
 This package is designed to run in a containerized environment (Docker/Kubernetes).
 1. Ensure the `logs/` directory is mounted to an external volume, otherwise logs will be destroyed on pod restart.
 2. Adjust `MAX_CONNECTIONS` in the `AsyncNetworkClient` based on the CPU/RAM limits of your specific Kubernetes Pod.
+
+## 🛡️ Core Evasion Mechanisms
+
+### TLS Fingerprinting
+Standard Python HTTP libraries (`requests`, `httpx`, `aiohttp`) use default OpenSSL fingerprints that are instantly flagged by modern anti-bot systems (Cloudflare, Datadome, Akamai). To bypass this, we use `curl_cffi`, which intercepts the TLS handshake and perfectly impersonates the cipher suites, extensions, and ALPN negotiation of modern browsers (e.g., Chrome 124).
+
+### SSL Verification
+We strictly control SSL verification to prevent unnecessary failures or security vulnerabilities. It is managed via the `VERIFY_SSL` configuration in `config.py` (default: `True`). We do not use hardcoded `verify=False` anywhere in the codebase.
+
+### Proxy Lifecycle & Rotation
+Proxies are central to maintaining network resilience:
+- **Sticky Sessions:** Requests sharing a `session_id` are pinned to a specific proxy to maintain state.
+- **Auto-Rotation:** Upon network failure or WAF block, the currently active proxy is placed into a cooldown period (e.g., 60-300 seconds), and a fresh proxy is immediately rotated in for the subsequent retry.
+- **Permanent Removal:** Proxies that repeatedly fail (configurable threshold, default 5 failures) are permanently purged from the rotation pool and from active sticky sessions.
+
+### User-Agent Rotation
+User-Agents dictate how the target server perceives our client.
+- **Modern Browsers:** Our rotation pool only includes modern variants of Chrome, Firefox, Edge, and Safari across Windows, macOS, Linux, Android, and iOS.
+- **Smart Rotation:** The `UserAgentManager` remembers the last generated User-Agent to ensure consecutive requests do not repeat the same identity whenever possible.
+
+### Intelligent Retry Mechanism
+The network engine uses `tenacity` for resilient execution.
+- **Exponential Backoff with Jitter:** Prevents thundering herd problems by adding random delays between retries.
+- **Fresh Contexts:** If a request fails, the proxy is automatically flagged as unhealthy, and the Retry Engine ensures that the next attempt uses a completely new proxy IP while seamlessly maintaining the session cookies.
